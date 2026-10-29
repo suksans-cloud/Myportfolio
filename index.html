@@ -115,7 +115,7 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>
       </span>
       <h3>My Goals</h3>
-      <p>เป้าหมายและแผนประจำปี</p>
+      <p id="hmGoalSub">เป้าหมายและแผนประจำปี</p>
     </a>
   </div>
   <h2 class="hm-h">ชีวิตและการจัดการ</h2>
@@ -148,6 +148,13 @@
       <h3>My Notes</h3>
       <p>โน้ต และสิ่งที่ต้องทำ</p>
     </a>
+    <a class="mff-card" href="diary/index.html">
+      <span class="icon-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3.5h11a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z"/><path d="M9 3.5v17M12.5 8.5h3.5M12.5 12h3.5"/></svg>
+      </span>
+      <h3>My Diary</h3>
+      <p>บันทึกประจำวัน</p>
+    </a>
   </div>
   <h2 class="hm-h">วันนี้และใกล้ถึงกำหนด</h2>
   <div class="hm-up" id="hmUp"></div>
@@ -176,6 +183,7 @@
 </nav>
 
 <script src="reminders.js"></script>
+<script src="goals-core.js"></script>
 <script src="config.js"></script>
 <script src="admin-login.js"></script>
 <script src="settings-store.js"></script>
@@ -518,11 +526,18 @@ if('serviceWorker' in navigator){
   var up=notes.filter(function(n){return n.due&&n.due<=ls&&!(n.kind==='check'&&n.items.length&&n.items.every(function(i){return i.d}))})
     .sort(function(a,b){return a.due.localeCompare(b.due)}).slice(0,4);
   var mo=['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
-  el('hmUp').innerHTML=up.length?up.map(function(n){
+  var rows=up.map(function(n){
     var p=n.due.split('-'), late=n.due<td, isToday=n.due===td;
     var sub=n.kind==='check'?(n.items.filter(function(i){return !i.d}).length+' รายการที่ยังไม่เสร็จ'):(n.body||'').slice(0,40);
-    return '<a class="hm-it" href="notes/index.html"><div><b>'+esc(n.title||sub||'โน้ต')+'</b><small>'+esc(sub)+'</small></div><em class="'+(late?'late':'')+'">'+(late?'เลยกำหนด ':isToday?'วันนี้ ':'')+(+p[2])+' '+mo[+p[1]-1]+'</em></a>';
-  }).join(''):'<div class="hm-none">ไม่มีรายการใกล้ถึงกำหนด</div>';
+    return {k:n.due,h:'<a class="hm-it" href="notes/index.html"><div><b>'+esc(n.title||sub||'โน้ต')+'</b><small>'+esc(sub)+'</small></div><em class="'+(late?'late':'')+'">'+(late?'เลยกำหนด ':isToday?'วันนี้ ':'')+(+p[2])+' '+mo[+p[1]-1]+'</em></a>'};
+  });
+  /* เป้าหมาย (My Goals): นิสัยประจำที่ยังไม่ทำ · เป้าใกล้ครบกำหนด · เป้าตัวเลขที่ช้ากว่าแผน — รวมในรายการเดียวกับโน้ต */
+  try{ if(window.MFFGoalsCore) MFFGoalsCore.upcoming(d).forEach(function(r){
+    rows.push({k:r.k,h:'<a class="hm-it" href="goals/index.html"><div><b>🎯 '+esc(r.title||'เป้าหมาย')+'</b><small>'+esc(r.sub)+'</small></div><em class="'+(r.late?'late':'')+'">'+esc(r.em)+'</em></a>'});
+  }); }catch(e){}
+  rows.sort(function(a,b){return String(a.k).localeCompare(String(b.k))});
+  el('hmUp').innerHTML=rows.length?rows.slice(0,6).map(function(r){return r.h}).join(''):'<div class="hm-none">ไม่มีรายการใกล้ถึงกำหนด</div>';
+  try{ var gs=window.MFFGoalsCore&&MFFGoalsCore.summary(d), gp=document.getElementById('hmGoalSub'); if(gs&&gs.n&&gp) gp.textContent='เป้าหมายปีนี้ คืบหน้า '+gs.avg+'%'; }catch(e){}
   /* ซ่อน/แสดงตัวเลขเงิน */
   var card=document.querySelector('.hm-card');
   var hid=false;try{hid=localStorage.getItem('mff_home_hide')==='1'}catch(e){}
