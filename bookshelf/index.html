@@ -124,7 +124,7 @@ function modal(title, bodyHtml, buttons){
   const btnWrap=document.getElementById('mffModalBtns');
   buttons.forEach(b=>{
     const btn=document.createElement('button');
-    btn.className='mff-btn '+(b.ghost?'mff-btn-ghost':'mff-btn-primary');
+    btn.className='mff-btn '+(b.ghost?'mff-btn-ghost':'mff-btn-primary'); btn.style.minWidth='0'; btn.style.flex='1';
     btn.textContent=b.label;
     btn.onclick=b.onClick;
     btnWrap.appendChild(btn);
@@ -377,7 +377,7 @@ function wishRow(w){
   /* สถานะรอซื้อ/ซื้อแล้ว ถูกแยกด้วยหัวข้อกลุ่มอยู่แล้ว จึงไม่แสดงป้ายสถานะซ้ำ */
   const meta=[w.author?'โดย '+esc(w.author):'', bought&&w.boughtAt?'ซื้อเมื่อ '+bkFmtDate(String(w.boughtAt).slice(0,10)):''].filter(Boolean).join(' · ');
   return `<div class="mff-book-row mbk-wish-row" data-wid="${esc(w.id)}">
-    <div class="b-title"><b>${esc(w.title)}</b>${meta?`<div class="w-meta">${meta}</div>`:''}</div>
+    <div class="b-title" data-wopen="${esc(w.id)}" style="cursor:pointer" role="button" tabindex="0"><b>${esc(w.title)}</b> <span style="color:${(loadInfo()[w.id]||{}).title?'var(--primary-light)':'var(--ink-faint)'};font-size:11px" title="${(loadInfo()[w.id]||{}).title?'มีรายละเอียดแล้ว':'แตะเพื่อดูรายละเอียด'}">${(loadInfo()[w.id]||{}).title?'●':'ℹ︎'}</span>${meta?`<div class="w-meta">${meta}</div>`:''}</div>
     <div class="w-acts">
       <button class="b-edit w-buy${bought?' undo':''}" data-wbuy="${esc(w.id)}" title="${bought?'ย้อนกลับเป็นรอซื้อ':'ทำเครื่องหมายว่าซื้อแล้ว'}" aria-label="${bought?'ย้อนกลับเป็นรอซื้อ':'ทำเครื่องหมายว่าซื้อแล้ว'}">${bought?'↩':'✓'}</button>
       <button class="b-edit" data-wedit="${esc(w.id)}" aria-label="แก้ไข">✎</button>
@@ -391,6 +391,7 @@ function renderWish(){
   return `<div class="mff-shelf" id="wishCard">
     <div class="mff-shelf-head"><h4>🛒 Wish List <span class="count">${list.length}</span></h4>
       <button class="mff-shelf-add" id="wishAdd">+ เพิ่มเล่มที่อยากซื้อ</button></div>
+    ${list.length?`<button type="button" id="wishFetchAll" class="mff-btn mff-btn-ghost" style="width:100%;margin:0 0 10px;min-height:38px;font-size:12.5px">📚 ดึงรายละเอียดหนังสือทุกเล่ม (${list.filter(x=>!(loadInfo()[x.id]||{}).title).length} เล่มที่ยังไม่มี)</button>`:''}
     <div class="mbk-hint" style="margin:0 0 4px;font-weight:700;color:var(--ink-soft)">หนังสือที่อยากได้ (${want.length})</div>
     ${want.length?want.map(wishRow).join(''):'<div class="mff-shelf-empty">ยังไม่มีหนังสือที่อยากได้</div>'}
     <div class="mbk-hint" style="margin:12px 0 4px;font-weight:700;color:var(--ink-soft);border-top:1px dashed var(--line);padding-top:10px">หนังสือที่ซื้อแล้ว (${got.length})</div>
@@ -411,13 +412,110 @@ function openWishModal(id){
       if(w){ w.title=title; w.author=author; w.year=yr;
         if(status==='bought'&&w.status!=='bought') w.boughtAt=now; if(status!=='bought') delete w.boughtAt;
         w.status=status; w.updatedAt=now; }
-      else wishes.push({id:uuid(),title,author,year:yr,status,boughtAt:status==='bought'?now:'',createdAt:now,updatedAt:now});
+      else { const nid=uuid(); wishes.push({id:nid,title,author,year:yr,status,boughtAt:status==='bought'?now:'',createdAt:now,updatedAt:now}); setTimeout(()=>prefetchWishInfo(nid),300); }
       saveWish(); closeModal(); render(); toast('บันทึกแล้ว');
     }}
   ]);
 }
+
+/* ===== รายละเอียดหนังสือ: ดึงอัตโนมัติจาก Google Books (ไม่เกี่ยวกับราคา) =====
+   เก็บแยกจากรายการ Wish List (คีย์ของตัวเอง) เพื่อไม่กระทบการซิงก์ Google Sheets เดิม */
+const BOOKINFO_KEY='mff_book_info_v1';
+function loadInfo(){ try{ return JSON.parse(localStorage.getItem(BOOKINFO_KEY)||'{}')||{}; }catch(e){ return {}; } }
+function saveInfo(m){ try{ localStorage.setItem(BOOKINFO_KEY,JSON.stringify(m)); }catch(e){} }
+function normBook(it){
+  const v=(it&&it.volumeInfo)||{};
+  const img=(v.imageLinks&&(v.imageLinks.thumbnail||v.imageLinks.smallThumbnail))||'';
+  return { gid:it.id||'', title:v.title||'', subtitle:v.subtitle||'', authors:(v.authors||[]).join(', '),
+    publisher:v.publisher||'', published:v.publishedDate||'', pages:v.pageCount||'', lang:v.language||'',
+    desc:String(v.description||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim(),
+    cover:img.replace(/^http:/,'https:'), link:v.infoLink||'' };
+}
+async function searchBooks(title,author,isbn){
+  const cleanIsbn=String(isbn||'').replace(/[^0-9Xx]/g,'');
+  const q=cleanIsbn?'isbn:'+cleanIsbn:'intitle:'+title+(author?'+inauthor:'+author:'');
+  const url='https://www.googleapis.com/books/v1/volumes?printType=books&maxResults=6&q='+encodeURIComponent(q).replace(/%2B/g,'+');
+  const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+  const j=await r.json(); return (j.items||[]).map(normBook);
+}
+function bookCardHtml(b,w){
+  const row=(k,v)=>v?`<div style="display:flex;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px"><span style="flex:0 0 76px;color:var(--ink-faint)">${k}</span><span style="flex:1;min-width:0;word-break:break-word">${esc(v)}</span></div>`:'';
+  const cover=b.cover?`<img src="${esc(b.cover)}" alt="ปก" style="width:92px;height:134px;object-fit:cover;border-radius:10px;box-shadow:0 4px 14px #0003;flex:none" onerror="this.style.display='none'">`:`<div style="width:92px;height:134px;border-radius:10px;background:var(--line);display:grid;place-items:center;font-size:30px;flex:none">📖</div>`;
+  return `<div style="display:flex;gap:14px;margin:6px 0 12px">${cover}<div style="min-width:0"><div style="font:700 16px/1.35 Prompt,sans-serif">${esc(b.title||w.title)}</div>${b.subtitle?`<div style="font-size:12px;color:var(--ink-soft);margin-top:2px">${esc(b.subtitle)}</div>`:''}<div style="font-size:13px;color:var(--ink-soft);margin-top:6px">${esc(b.authors||w.author||'ไม่ทราบผู้แต่ง')}</div></div></div>
+  ${row('สำนักพิมพ์',b.publisher)}${row('ISBN',b.isbn)}${row('วันที่พิมพ์',b.published)}${row('จำนวนหน้า',b.pages?b.pages+' หน้า':'')}${row('ภาษา',b.lang)}
+  <div style="margin:12px 0 4px;font-weight:700;font-size:13px">เนื้อหาโดยย่อ</div>
+  <div style="font-size:13px;line-height:1.7;color:var(--ink-soft);max-height:34vh;overflow:auto">${b.desc?esc(b.desc):'ไม่พบเรื่องย่อของเล่มนี้'}</div>
+  <a href="https://www.goodreads.com/search?q=${encodeURIComponent((b.title||w.title)+' '+(String(b.authors||w.author||'').split(',')[0]))}" target="_blank" rel="noopener" style="display:inline-block;margin:10px 12px 4px 0;font-size:12px;color:var(--primary)">ดูคะแนน/รีวิวใน Goodreads ↗</a>
+  ${b.link?`<a href="${esc(b.link)}" target="_blank" rel="noopener" style="display:inline-block;margin:10px 0 4px;font-size:12px;color:var(--primary)">ดูใน Google Books ↗</a>`:''}`;
+}
+
+function editWishInfo(id,done){
+  const w=wishes.find(x=>x.id===id); if(!w) return;
+  const b=loadInfo()[id]||{};
+  const f=(k,l,v,ph)=>`<label style="display:block;font-size:12px;color:var(--ink-soft);margin:8px 0 0">${l}<input id="bi_${k}" type="text" value="${esc(v||'')}" placeholder="${esc(ph||'')}" style="width:100%;box-sizing:border-box;margin-top:3px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--ink);font:inherit;font-size:14px"></label>`;
+  modal('กรอก/แก้ไขรายละเอียดเอง',
+   `<div style="padding-bottom:8px">${f('isbn','ISBN (เลขหลังเล่ม ถ้ามี)',b.isbn,'เช่น 9786161234567')}<button type="button" id="bi_fetch" class="mff-btn mff-btn-ghost" style="width:100%;margin:8px 0 2px">🔍 ดึงข้อมูลจาก ISBN</button>
+   ${f('authors','ผู้แต่ง',b.authors||w.author)}${f('publisher','สำนักพิมพ์',b.publisher)}${f('published','วันที่พิมพ์/ปีที่พิมพ์',b.published)}${f('pages','จำนวนหน้า',b.pages)}${f('cover','ลิงก์รูปปก (ถ้ามี)',b.cover,'https://...')}
+   <label style="display:block;font-size:12px;color:var(--ink-soft);margin:8px 0 0">เนื้อหาโดยย่อ<textarea id="bi_desc" rows="5" style="width:100%;box-sizing:border-box;margin-top:3px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--ink);font:inherit;font-size:14px">${esc(b.desc||'')}</textarea></label></div>`,
+   [{label:'ยกเลิก',ghost:true,onClick:()=>done?done():closeModal()},
+    {label:'บันทึก',onClick:()=>{
+      const g=k=>document.getElementById('bi_'+k).value.trim();
+      const m=loadInfo(); const old=m[id]||{};
+      m[id]=Object.assign({},old,{title:old.title||w.title,isbn:g('isbn'),authors:g('authors'),publisher:g('publisher'),published:g('published'),pages:g('pages'),cover:g('cover').replace(/^http:/,'https:'),desc:g('desc'),manual:true,fetchedAt:new Date().toISOString()});
+      saveInfo(m); toast('บันทึกรายละเอียดแล้ว'); openWishDetail(id);
+    }}]);
+  document.getElementById('bi_fetch').onclick=async()=>{
+    const isbn=document.getElementById('bi_isbn').value; if(!isbn.trim()){ toast('ใส่เลข ISBN ก่อน'); return; }
+    const btn=document.getElementById('bi_fetch'); btn.textContent='⏳ กำลังค้นหา...';
+    try{ const l=await searchBooks('', '', isbn); btn.textContent='🔍 ดึงข้อมูลจาก ISBN';
+      if(!l.length){ toast('ไม่พบ ISBN นี้ในฐานข้อมูล'); return; }
+      const x=l[0], set=(k,v)=>{ const el=document.getElementById('bi_'+k); if(el&&v&&!el.value.trim()) el.value=v; };
+      set('authors',x.authors);set('publisher',x.publisher);set('published',x.published);set('pages',x.pages);set('cover',x.cover);set('desc',x.desc); toast('เติมข้อมูลให้แล้ว ตรวจสอบก่อนบันทึก');
+    }catch(e){ btn.textContent='🔍 ดึงข้อมูลจาก ISBN'; toast('ดึงข้อมูลไม่สำเร็จ'); }
+  };
+}
+async function prefetchWishInfo(id){
+  try{ const w=wishes.find(x=>x.id===id); if(!w) return;
+    const m=loadInfo(); if(m[id]&&m[id].title) return;
+    let list=await searchBooks(w.title,w.author); if(!list.length&&w.author) list=await searchBooks(w.title,'');
+    if(!list.length) return; const m2=loadInfo(); m2[id]=Object.assign({fetchedAt:new Date().toISOString()},list[0]); saveInfo(m2);
+  }catch(e){}
+}
+
+let _bulkRun=false;
+async function fetchAllWishInfo(){
+  if(_bulkRun) return; const todo=wishes.filter(x=>!(loadInfo()[x.id]||{}).title);
+  if(!todo.length){ toast('ทุกเล่มมีรายละเอียดแล้ว'); return; }
+  _bulkRun=true; const btn=document.getElementById('wishFetchAll'); let ok=0,i=0;
+  for(const w of todo){ i++; if(btn) btn.textContent='⏳ กำลังดึง '+i+'/'+todo.length+' ...';
+    const before=!!(loadInfo()[w.id]||{}).title; await prefetchWishInfo(w.id); if((loadInfo()[w.id]||{}).title&&!before) ok++;
+    await new Promise(r=>setTimeout(r,450)); }
+  _bulkRun=false; render(); toast('ดึงสำเร็จ '+ok+' จาก '+todo.length+' เล่ม'+(ok<todo.length?' (เล่มที่ไม่เจอกด “กรอกเอง” ได้)':''));
+}
+async function openWishDetail(id){
+  const w=wishes.find(x=>x.id===id); if(!w) return;
+  const info=loadInfo();
+  const show=(b,extra)=>modal('รายละเอียดหนังสือ', `<div id="bkDet">${bookCardHtml(b,w)}${extra||''}</div>`, [
+    {label:'ปิด', ghost:true, onClick:closeModal},
+    {label:'กรอกเอง', ghost:true, onClick:()=>editWishInfo(id)},
+    {label:'ค้นหาใหม่', onClick:()=>pick(true)}
+  ]);
+  const pick=async(force)=>{
+    modal('รายละเอียดหนังสือ',`<p style="text-align:center;padding:30px 0;color:var(--ink-soft)">⏳ กำลังค้นหา “${esc(w.title)}” ...</p>`,[{label:'ปิด',ghost:true,onClick:closeModal}]);
+    let list=[];
+    try{ const isb=(loadInfo()[id]||{}).isbn; if(isb) list=await searchBooks('','',isb); if(!list.length) list=await searchBooks(w.title,w.author); if(!list.length&&w.author) list=await searchBooks(w.title,''); }
+    catch(e){ modal('รายละเอียดหนังสือ',`<p style="padding:24px 0;color:var(--ink-soft);font-size:13.5px">ดึงข้อมูลไม่สำเร็จ (${esc(e.message)}) ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่</p>`,[{label:'ปิด',ghost:true,onClick:closeModal},{label:'กรอกเอง',ghost:true,onClick:()=>editWishInfo(id)},{label:'ลองใหม่',onClick:()=>pick(true)}]); return; }
+    if(!list.length){ modal('รายละเอียดหนังสือ',`<p style="padding:24px 0;color:var(--ink-soft);font-size:13.5px">ไม่พบข้อมูลของ “${esc(w.title)}” (หนังสือไทยบางเล่มอาจไม่มีในฐานข้อมูล) ลองแก้ชื่อเรื่องหรือผู้แต่งในปุ่ม ✎ แล้วค้นหาใหม่ หรือกรอกรายละเอียดเอง</p>`,[{label:'ปิด',ghost:true,onClick:closeModal},{label:'กรอกเอง',onClick:()=>editWishInfo(id)}]); return; }
+    const choose=i=>{ const m=loadInfo(); m[id]=Object.assign({fetchedAt:new Date().toISOString()},list[i]); saveInfo(m); show(m[id], list.length>1?`<button class="mff-btn mff-btn-ghost" style="width:100%;margin:8px 0" id="bkOther">ไม่ใช่เล่มนี้? เลือกเล่มอื่น (${list.length-1})</button>`:''); const o=document.getElementById('bkOther'); if(o) o.onclick=()=>chooser(); };
+    const chooser=()=>{ modal('เลือกเล่มที่ตรง', list.map((b,i)=>`<div data-pk="${i}" style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer;align-items:center">${b.cover?`<img src="${esc(b.cover)}" style="width:44px;height:64px;object-fit:cover;border-radius:6px">`:'<div style="width:44px;height:64px;background:var(--line);border-radius:6px"></div>'}<div style="min-width:0"><b style="font-size:13.5px">${esc(b.title)}</b><div style="font-size:12px;color:var(--ink-soft)">${esc(b.authors)} ${b.publisher?'· '+esc(b.publisher):''}</div></div></div>`).join(''),[{label:'ย้อนกลับ',ghost:true,onClick:()=>show(loadInfo()[id]||list[0])}]); document.querySelectorAll('[data-pk]').forEach(el=>el.onclick=()=>choose(+el.dataset.pk)); };
+    choose(0);
+  };
+  if(info[id]&&info[id].title){ show(info[id]); } else pick(false);
+}
 function wireWish(){
   document.getElementById('wishAdd')?.addEventListener('click',()=>openWishModal());
+  document.getElementById('wishFetchAll')?.addEventListener('click',fetchAllWishInfo);
+  document.querySelectorAll('[data-wopen]').forEach(b=>{b.addEventListener('click',()=>openWishDetail(b.dataset.wopen));b.addEventListener('keydown',e=>{if(e.key==='Enter')openWishDetail(b.dataset.wopen)});});
   document.querySelectorAll('[data-wedit]').forEach(b=>b.addEventListener('click',()=>openWishModal(b.dataset.wedit)));
   document.querySelectorAll('[data-wbuy]').forEach(b=>b.addEventListener('click',()=>{
     const w=wishes.find(x=>x.id===b.dataset.wbuy); if(!w) return; const now=new Date().toISOString();
@@ -429,7 +527,7 @@ function wireWish(){
     const w=wishes.find(x=>x.id===b.dataset.wdel); if(!w) return;
     modal('ลบรายการนี้?', `<p style="font-size:13.5px;color:var(--ink-soft);margin:14px 0">ลบ "<b>${esc(w.title)}</b>" ออกจาก Wish List?</p>`, [
       {label:'ยกเลิก', ghost:true, onClick:closeModal},
-      {label:'ลบ', onClick:()=>{ wishes=wishes.filter(x=>x.id!==w.id); saveWish(); closeModal(); render(); }}
+      {label:'ลบ', onClick:()=>{ wishes=wishes.filter(x=>x.id!==w.id); try{ const m=loadInfo(); delete m[w.id]; saveInfo(m); }catch(e){} saveWish(); closeModal(); render(); }}
     ]);
   }));
 }
