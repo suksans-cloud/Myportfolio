@@ -391,6 +391,7 @@ function renderWish(){
   return `<div class="mff-shelf" id="wishCard">
     <div class="mff-shelf-head"><h4>🛒 Wish List <span class="count">${list.length}</span></h4>
       <button class="mff-shelf-add" id="wishAdd">+ เพิ่มเล่มที่อยากซื้อ</button></div>
+    <div style="text-align:right;margin:-2px 0 6px"><button type="button" id="bookKeyBtn" style="border:0;background:transparent;color:var(--ink-faint);font-size:11.5px;text-decoration:underline;padding:4px">⚙ API key ค้นหนังสือ${(()=>{try{return localStorage.getItem('google_books_api_key')?' (ตั้งแล้ว ✓)':''}catch(e){return ''}})()}</button></div>
     ${list.length?`<button type="button" id="wishFetchAll" class="mff-btn mff-btn-ghost" style="width:100%;margin:0 0 10px;min-height:38px;font-size:12.5px">📚 ดึงรายละเอียดหนังสือทุกเล่ม (${list.filter(x=>!(loadInfo()[x.id]||{}).title).length} เล่มที่ยังไม่มี)</button>`:''}
     <div class="mbk-hint" style="margin:0 0 4px;font-weight:700;color:var(--ink-soft)">หนังสือที่อยากได้ (${want.length})</div>
     ${want.length?want.map(wishRow).join(''):'<div class="mff-shelf-empty">ยังไม่มีหนังสือที่อยากได้</div>'}
@@ -435,7 +436,16 @@ async function searchBooks(title,author,isbn){
   const cleanIsbn=String(isbn||'').replace(/[^0-9Xx]/g,'');
   const q=cleanIsbn?'isbn:'+cleanIsbn:'intitle:'+title+(author?'+inauthor:'+author:'');
   const url='https://www.googleapis.com/books/v1/volumes?printType=books&maxResults=6&q='+encodeURIComponent(q).replace(/%2B/g,'+');
-  const r=await fetch(url); if(!r.ok) throw new Error('HTTP '+r.status);
+  let key=''; try{ key=localStorage.getItem('google_books_api_key')||''; }catch(e){}
+  const full=url+(key?'&key='+encodeURIComponent(key):'');
+  let r=null;
+  for(let a=0;a<3;a++){
+    r=await fetch(full);
+    if(r.ok) break;
+    if(r.status!==429&&r.status<500) break;
+    await new Promise(res=>setTimeout(res,1500*(a+1)));
+  }
+  if(!r.ok){ const err=new Error(r.status===429?'RATE':'HTTP '+r.status); err.status=r.status; throw err; }
   const j=await r.json(); return (j.items||[]).map(normBook);
 }
 function bookCardHtml(b,w){
@@ -479,17 +489,40 @@ async function prefetchWishInfo(id){
     const m=loadInfo(); if(m[id]&&m[id].title) return;
     let list=await searchBooks(w.title,w.author); if(!list.length&&w.author) list=await searchBooks(w.title,'');
     if(!list.length) return; const m2=loadInfo(); m2[id]=Object.assign({fetchedAt:new Date().toISOString()},list[0]); saveInfo(m2);
-  }catch(e){}
+  }catch(e){ if(e&&e.status===429) throw e; }
 }
 
+
+function openBookKeyModal(){
+  let cur=''; try{ cur=localStorage.getItem('google_books_api_key')||''; }catch(e){}
+  modal('ตั้งค่า API key ของ Google Books',
+   `<div style="font-size:13px;line-height:1.7;color:var(--ink-soft);padding-bottom:6px">
+    <p style="margin:6px 0">ถ้าเจอข้อความ “ค้นถี่เกินไป (429)” บ่อย การใส่ API key ของตัวเอง (ฟรี) จะได้โควต้าส่วนตัว ไม่ต้องแชร์กับคนอื่น</p>
+    <ol style="margin:6px 0 10px;padding-left:20px"><li>เปิด <b>console.cloud.google.com</b> แล้วสร้างโปรเจกต์ (หรือใช้โปรเจกต์ที่มีอยู่)</li><li>ไปที่ APIs &amp; Services › Library ค้นหา <b>Books API</b> แล้วกด Enable</li><li>ไปที่ Credentials › Create credentials › <b>API key</b> แล้วคัดลอกคีย์</li><li>(แนะนำ) กด Restrict key → เลือกเฉพาะ Books API</li></ol>
+    <label style="display:block;font-size:12px">API key<input id="bkKey" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" value="${esc(cur)}" placeholder="AIza..." style="width:100%;box-sizing:border-box;margin-top:3px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--ink);font:inherit;font-size:14px"></label>
+    <p style="margin:8px 0 0;font-size:11.5px;color:var(--ink-faint)">คีย์เก็บในเครื่องนี้เท่านั้น ไม่ซิงก์ และไม่ควรแชร์ให้ผู้อื่น</p></div>`,
+   [{label:'ยกเลิก',ghost:true,onClick:closeModal},
+    {label:'ทดสอบ & บันทึก',onClick:async()=>{
+      const v=document.getElementById('bkKey').value.trim();
+      if(!v){ try{ localStorage.removeItem('google_books_api_key'); }catch(e){} closeModal(); render(); toast('ลบ API key แล้ว'); return; }
+      try{ const r=await fetch('https://www.googleapis.com/books/v1/volumes?maxResults=1&q=intitle:test&key='+encodeURIComponent(v));
+        if(!r.ok){ toast(r.status===400||r.status===403?'คีย์ใช้ไม่ได้ (ตรวจว่าเปิด Books API แล้ว)':'ทดสอบไม่สำเร็จ (HTTP '+r.status+')'); return; }
+      }catch(e){ toast('ทดสอบไม่สำเร็จ ตรวจสอบอินเทอร์เน็ต'); return; }
+      try{ localStorage.setItem('google_books_api_key',v); }catch(e){}
+      closeModal(); render(); toast('บันทึก API key แล้ว ✅');
+    }}]);
+}
 let _bulkRun=false;
 async function fetchAllWishInfo(){
   if(_bulkRun) return; const todo=wishes.filter(x=>!(loadInfo()[x.id]||{}).title);
   if(!todo.length){ toast('ทุกเล่มมีรายละเอียดแล้ว'); return; }
   _bulkRun=true; const btn=document.getElementById('wishFetchAll'); let ok=0,i=0;
   for(const w of todo){ i++; if(btn) btn.textContent='⏳ กำลังดึง '+i+'/'+todo.length+' ...';
-    const before=!!(loadInfo()[w.id]||{}).title; await prefetchWishInfo(w.id); if((loadInfo()[w.id]||{}).title&&!before) ok++;
-    await new Promise(r=>setTimeout(r,450)); }
+    const before=!!(loadInfo()[w.id]||{}).title;
+    try{ await prefetchWishInfo(w.id); }catch(e){ _bulkRun=false; render(); toast('Google จำกัดการค้นชั่วคราว ดึงได้ '+ok+' เล่ม รอสักครู่แล้วกดดึงอีกครั้ง เล่มที่ได้แล้วจะไม่ดึงซ้ำ',); return; }
+    if((loadInfo()[w.id]||{}).title&&!before) ok++;
+    let hk=false; try{ hk=!!localStorage.getItem('google_books_api_key'); }catch(e){}
+    await new Promise(r=>setTimeout(r,hk?400:1200)); }
   _bulkRun=false; render(); toast('ดึงสำเร็จ '+ok+' จาก '+todo.length+' เล่ม'+(ok<todo.length?' (เล่มที่ไม่เจอกด “กรอกเอง” ได้)':''));
 }
 async function openWishDetail(id){
@@ -504,7 +537,7 @@ async function openWishDetail(id){
     modal('รายละเอียดหนังสือ',`<p style="text-align:center;padding:30px 0;color:var(--ink-soft)">⏳ กำลังค้นหา “${esc(w.title)}” ...</p>`,[{label:'ปิด',ghost:true,onClick:closeModal}]);
     let list=[];
     try{ const isb=(loadInfo()[id]||{}).isbn; if(isb) list=await searchBooks('','',isb); if(!list.length) list=await searchBooks(w.title,w.author); if(!list.length&&w.author) list=await searchBooks(w.title,''); }
-    catch(e){ modal('รายละเอียดหนังสือ',`<p style="padding:24px 0;color:var(--ink-soft);font-size:13.5px">ดึงข้อมูลไม่สำเร็จ (${esc(e.message)}) ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่</p>`,[{label:'ปิด',ghost:true,onClick:closeModal},{label:'กรอกเอง',ghost:true,onClick:()=>editWishInfo(id)},{label:'ลองใหม่',onClick:()=>pick(true)}]); return; }
+    catch(e){ modal('รายละเอียดหนังสือ',`<p style="padding:24px 0;color:var(--ink-soft);font-size:13.5px">${e.status===429?'Google Books จำกัดจำนวนครั้งที่ค้นหาชั่วคราว (ค้นถี่เกินไป) รอ 1-2 นาทีแล้วกด “ลองใหม่” หรือกด “กรอกเอง” ได้เลย':'ดึงข้อมูลไม่สำเร็จ ('+esc(e.message)+') ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'}</p>`,[{label:'ปิด',ghost:true,onClick:closeModal},{label:'กรอกเอง',ghost:true,onClick:()=>editWishInfo(id)},{label:'ลองใหม่',onClick:()=>pick(true)}]); return; }
     if(!list.length){ modal('รายละเอียดหนังสือ',`<p style="padding:24px 0;color:var(--ink-soft);font-size:13.5px">ไม่พบข้อมูลของ “${esc(w.title)}” (หนังสือไทยบางเล่มอาจไม่มีในฐานข้อมูล) ลองแก้ชื่อเรื่องหรือผู้แต่งในปุ่ม ✎ แล้วค้นหาใหม่ หรือกรอกรายละเอียดเอง</p>`,[{label:'ปิด',ghost:true,onClick:closeModal},{label:'กรอกเอง',onClick:()=>editWishInfo(id)}]); return; }
     const choose=i=>{ const m=loadInfo(); m[id]=Object.assign({fetchedAt:new Date().toISOString()},list[i]); saveInfo(m); show(m[id], list.length>1?`<button class="mff-btn mff-btn-ghost" style="width:100%;margin:8px 0" id="bkOther">ไม่ใช่เล่มนี้? เลือกเล่มอื่น (${list.length-1})</button>`:''); const o=document.getElementById('bkOther'); if(o) o.onclick=()=>chooser(); };
     const chooser=()=>{ modal('เลือกเล่มที่ตรง', list.map((b,i)=>`<div data-pk="${i}" style="display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer;align-items:center">${b.cover?`<img src="${esc(b.cover)}" style="width:44px;height:64px;object-fit:cover;border-radius:6px">`:'<div style="width:44px;height:64px;background:var(--line);border-radius:6px"></div>'}<div style="min-width:0"><b style="font-size:13.5px">${esc(b.title)}</b><div style="font-size:12px;color:var(--ink-soft)">${esc(b.authors)} ${b.publisher?'· '+esc(b.publisher):''}</div></div></div>`).join(''),[{label:'ย้อนกลับ',ghost:true,onClick:()=>show(loadInfo()[id]||list[0])}]); document.querySelectorAll('[data-pk]').forEach(el=>el.onclick=()=>choose(+el.dataset.pk)); };
@@ -515,6 +548,7 @@ async function openWishDetail(id){
 function wireWish(){
   document.getElementById('wishAdd')?.addEventListener('click',()=>openWishModal());
   document.getElementById('wishFetchAll')?.addEventListener('click',fetchAllWishInfo);
+  document.getElementById('bookKeyBtn')?.addEventListener('click',openBookKeyModal);
   document.querySelectorAll('[data-wopen]').forEach(b=>{b.addEventListener('click',()=>openWishDetail(b.dataset.wopen));b.addEventListener('keydown',e=>{if(e.key==='Enter')openWishDetail(b.dataset.wopen)});});
   document.querySelectorAll('[data-wedit]').forEach(b=>b.addEventListener('click',()=>openWishModal(b.dataset.wedit)));
   document.querySelectorAll('[data-wbuy]').forEach(b=>b.addEventListener('click',()=>{
